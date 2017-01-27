@@ -274,22 +274,68 @@ public class ParallelTestExecutor extends Builder {
         }
     }
 
-    private static TestResult findPreviousTestResult(Run<?, ?> b, TaskListener listener) {
+    private static TestResult checkBuild(Run<?, ?> b, TaskListener listener) {
+        if(!RESULTS_OF_BUILDS_TO_CONSIDER.contains(b.getResult())) return null;
+
+        AbstractTestResultAction tra = b.getAction(AbstractTestResultAction.class);
+        if (tra == null) return null;
+
+        Object o = tra.getResult();
+        if (o instanceof TestResult) {
+            listener.getLogger().printf("Using build #%d as reference\n", b.getNumber());
+            return (TestResult) o;
+        }
+
+        return null;
+    }
+
+    private static TestResult findPreviousTestResultFromBranch(Run<?, ?> b, TaskListener listener) {
         for (int i = 0; i < NUMBER_OF_BUILDS_TO_SEARCH; i++) {// limit the search to a small number to avoid loading too much
             b = b.getPreviousBuild();
-            if (b == null) break;
-            if(!RESULTS_OF_BUILDS_TO_CONSIDER.contains(b.getResult())) continue;
+            if (b == null) return null;
 
-            AbstractTestResultAction tra = b.getAction(AbstractTestResultAction.class);
-            if (tra == null) continue;
+            TestResult result = checkBuild(b, listener);
+            if (result != null) return result;
+        }
 
-            Object o = tra.getResult();
-            if (o instanceof TestResult) {
-                listener.getLogger().printf("Using build #%d as reference\n", b.getNumber());
-                return (TestResult) o;
+        return null;    // couldn't find it
+    }
+
+    private static TestResult findPreviousTestResult(Run<?, ?> b, TaskListener listener) {
+        Run<?, ?> originalBuild = b;
+        TestResult result = findPreviousTestResultFromBranch(b, listener);
+
+        if (result != null) return result;
+
+        Job<?, ?> job = originalBuild.getParent();
+        if (job == null || job.getName().equals("master")) return null; // no good build in the master branch
+
+        Object o = job.getParent();
+        Job<?, ?> masterJob = null;
+
+        if (o != null && o instanceof AbstractItem) {
+            // Find master branch's job
+            AbstractItem parentJob = (AbstractItem)o;
+            Collection<?> allJobs = parentJob.getAllJobs();
+
+            for (Object j : allJobs) {
+                if (j != null && j instanceof Job<?, ?>) {
+                    Job<?, ?> jj = (Job<?, ?>)j;
+                    if (jj.getName().equals("master")) {
+                        masterJob = jj;
+                    }
+                }
             }
         }
-        return null;    // couldn't find it
+
+        if (masterJob == null || masterJob.getLastBuild() == null) return null; // no mater branch ??!
+
+        TestResult masterLastBuildResult = checkBuild(masterJob.getLastBuild(), listener);
+
+        if (masterLastBuildResult != null)
+          return masterLastBuildResult;
+        else
+          return findPreviousTestResultFromBranch(masterJob.getLastBuild(), listener);
     }
 
     @Extension
